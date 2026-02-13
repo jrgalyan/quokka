@@ -64,18 +64,18 @@ func (r *Router) Use(mw ...Middleware) {
 	r.mw = append(r.mw, mw...)
 }
 
-// NotFound sets a custom handler for 404 responses. It is wrapped with router middleware.
+// NotFound sets a custom handler for 404 responses. Router-level middleware is applied at request time.
 func (r *Router) NotFound(h Handler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.notFound = chain(r.mw, h)
+	r.notFound = h
 }
 
-// MethodNotAllowed sets a custom handler for 405 responses. It is wrapped with router middleware.
+// MethodNotAllowed sets a custom handler for 405 responses. Router-level middleware is applied at request time.
 func (r *Router) MethodNotAllowed(h Handler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.methodNA = chain(r.mw, h)
+	r.methodNA = h
 }
 
 // Handle registers a route handler for method and path.
@@ -105,7 +105,7 @@ func (r *Router) handleWithPrefix(prefix, method, p string, h Handler, mw ...Mid
 		}
 		n = child
 	}
-	h = chain(append(r.mw, mw...), h)
+	h = chain(mw, h)
 	n.handlers[strings.ToUpper(method)] = h
 }
 
@@ -202,8 +202,10 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		h = handler
 	}
 	c.maxBodySize = r.MaxBodySize
+	mw := r.mw
 	r.mu.RUnlock()
 
+	h = chain(mw, h)
 	h(c)
 }
 
