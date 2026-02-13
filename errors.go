@@ -16,8 +16,8 @@
 
 package quokka
 
-// ErrorResponse is a consistent error payload
-// Fields follow RFC 9457 problem+json style without using that media type directly.
+// ErrorResponse is a consistent error payload loosely inspired by RFC 9457 (Problem Details for HTTP APIs).
+// It does not use the application/problem+json media type or the RFC's field names.
 type ErrorResponse struct {
 	Error   string            `json:"error"`
 	Message string            `json:"message,omitempty"`

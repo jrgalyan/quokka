@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -120,5 +121,140 @@ var _ = Describe("Context", func() {
 		rr = httptest.NewRecorder()
 		r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/bind", bytes.NewBufferString(`{"a":1,"b":2}`)))
 		Expect(rr.Code).To(Equal(http.StatusBadRequest))
+	})
+
+	It("rejects malformed JSON in BindJSON", func() {
+		r := q.New()
+		type X struct {
+			A int `json:"a"`
+		}
+		r.POST("/bind", func(c *q.Context) {
+			var x X
+			if err := c.BindJSON(&x); err != nil {
+				c.JSON(http.StatusBadRequest, q.ErrorResponse{Error: err.Error()})
+				return
+			}
+			c.Status(http.StatusOK)
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/bind", bytes.NewBufferString(`{invalid json`)))
+		Expect(rr.Code).To(Equal(http.StatusBadRequest))
+	})
+
+	It("rejects oversized body in BindJSON with custom MaxBodySize", func() {
+		r := q.New()
+		r.MaxBodySize = 16 // very small limit
+		type X struct {
+			A string `json:"a"`
+		}
+		r.POST("/bind", func(c *q.Context) {
+			var x X
+			if err := c.BindJSON(&x); err != nil {
+				c.JSON(http.StatusBadRequest, q.ErrorResponse{Error: "too large"})
+				return
+			}
+			c.Status(http.StatusOK)
+		})
+
+		// Body larger than 16 bytes
+		bigBody := `{"a":"` + strings.Repeat("x", 100) + `"}`
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/bind", bytes.NewBufferString(bigBody)))
+		Expect(rr.Code).To(Equal(http.StatusBadRequest))
+	})
+
+	It("prevents double-write: JSON then Text is silently ignored", func() {
+		r := q.New()
+		r.GET("/dw", func(c *q.Context) {
+			c.JSON(http.StatusOK, map[string]string{"a": "b"})
+			c.Text(http.StatusConflict, "should not appear")
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/dw", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Header().Get("Content-Type")).To(ContainSubstring("application/json"))
+		Expect(rr.Body.String()).NotTo(ContainSubstring("should not appear"))
+	})
+
+	It("prevents double-write: Text then JSON is silently ignored", func() {
+		r := q.New()
+		r.GET("/dw2", func(c *q.Context) {
+			c.Text(http.StatusOK, "first")
+			c.JSON(http.StatusConflict, map[string]string{"a": "b"})
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/dw2", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Body.String()).To(Equal("first"))
+	})
+
+	It("prevents double-write: Bytes then Text is silently ignored", func() {
+		r := q.New()
+		r.GET("/dw3", func(c *q.Context) {
+			c.Bytes(http.StatusOK, []byte("first"), "application/octet-stream")
+			c.Text(http.StatusConflict, "should not appear")
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/dw3", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Body.String()).To(Equal("first"))
+	})
+
+	It("reads query parameters", func() {
+		r := q.New()
+		r.GET("/search", func(c *q.Context) {
+			c.Text(http.StatusOK, c.Query("q"))
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/search?q=hello", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Body.String()).To(Equal("hello"))
+	})
+
+	It("reads request headers", func() {
+		r := q.New()
+		r.GET("/h", func(c *q.Context) {
+			c.Text(http.StatusOK, c.Header("X-Custom"))
+		})
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/h", nil)
+		req.Header.Set("X-Custom", "myval")
+		r.ServeHTTP(rr, req)
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Body.String()).To(Equal("myval"))
+	})
+
+	It("sets response headers", func() {
+		r := q.New()
+		r.GET("/sh", func(c *q.Context) {
+			c.SetHeader("X-Custom", "resp")
+			c.Status(http.StatusOK)
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/sh", nil))
+		Expect(rr.Header().Get("X-Custom")).To(Equal("resp"))
+	})
+
+	It("returns false for missing cookie", func() {
+		r := q.New()
+		r.GET("/c", func(c *q.Context) {
+			_, ok := c.Cookie("missing")
+			if !ok {
+				c.Status(http.StatusNotFound)
+				return
+			}
+			c.Status(http.StatusOK)
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/c", nil))
+		Expect(rr.Code).To(Equal(http.StatusNotFound))
 	})
 })

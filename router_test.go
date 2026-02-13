@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -142,5 +143,126 @@ var _ = Describe("Router", func() {
 		Expect(rr.Code).To(Equal(http.StatusOK))
 		// content of LICENSE should start with Apache header in this repo
 		Expect(rr.Body.String()).To(ContainSubstring("Apache License"))
+	})
+
+	It("handles concurrent requests safely", func() {
+		r := q.New()
+		r.GET("/count", func(c *q.Context) { c.Text(http.StatusOK, "ok") })
+		r.GET("/user/:id", func(c *q.Context) { c.Text(http.StatusOK, c.Param("id")) })
+
+		var wg sync.WaitGroup
+		const n = 100
+		wg.Add(n)
+		for i := 0; i < n; i++ {
+			go func() {
+				defer wg.Done()
+				rr := httptest.NewRecorder()
+				r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/count", nil))
+				Expect(rr.Code).To(Equal(http.StatusOK))
+			}()
+		}
+		wg.Wait()
+	})
+
+	It("normalizes double slashes in paths", func() {
+		r := q.New()
+		r.GET("/api/users", func(c *q.Context) { c.Text(http.StatusOK, "found") })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "//api//users", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Body.String()).To(Equal("found"))
+	})
+
+	It("panics on conflicting param names at the same level", func() {
+		r := q.New()
+		r.GET("/users/:id", func(c *q.Context) { c.Status(http.StatusOK) })
+
+		Expect(func() {
+			r.GET("/users/:userId", func(c *q.Context) { c.Status(http.StatusOK) })
+		}).To(PanicWith(ContainSubstring("conflicting param name")))
+	})
+
+	It("panics on nil handler at registration time", func() {
+		r := q.New()
+		Expect(func() {
+			r.GET("/bad", nil)
+		}).To(PanicWith("quokka: nil handler"))
+	})
+
+	It("serves static files via HEAD method", func() {
+		r := q.New()
+		r.ServeFiles("/pub", http.FS(memFS{"/a.txt": "hello"}))
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodHead, "/pub/a.txt", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		// HEAD should have no body
+		Expect(rr.Body.Len()).To(Equal(0))
+	})
+
+	It("returns 404 for missing static files", func() {
+		r := q.New()
+		r.ServeFiles("/pub", http.FS(memFS{"/a.txt": "hello"}))
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/pub/missing.txt", nil))
+		Expect(rr.Code).To(Equal(http.StatusNotFound))
+	})
+
+	It("allows custom NotFound and MethodNotAllowed handlers", func() {
+		r := q.New()
+		r.NotFound(func(c *q.Context) { c.Text(http.StatusNotFound, "custom 404") })
+		r.MethodNotAllowed(func(c *q.Context) { c.Text(http.StatusMethodNotAllowed, "custom 405") })
+		r.POST("/things", func(c *q.Context) { c.Status(http.StatusCreated) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/nope", nil))
+		Expect(rr.Code).To(Equal(http.StatusNotFound))
+		Expect(rr.Body.String()).To(Equal("custom 404"))
+
+		rr = httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/things", nil))
+		Expect(rr.Code).To(Equal(http.StatusMethodNotAllowed))
+		Expect(rr.Body.String()).To(Equal("custom 405"))
+	})
+
+	It("supports all HTTP method helpers", func() {
+		r := q.New()
+		methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions, http.MethodHead}
+		h := func(c *q.Context) { c.Text(http.StatusOK, c.R.Method) }
+
+		r.GET("/m", h)
+		r.POST("/m", h)
+		r.PUT("/m", h)
+		r.DELETE("/m", h)
+		r.PATCH("/m", h)
+		r.OPTIONS("/m", h)
+		r.HEAD("/m", h)
+
+		for _, m := range methods {
+			rr := httptest.NewRecorder()
+			r.ServeHTTP(rr, httptest.NewRequest(m, "/m", nil))
+			Expect(rr.Code).To(Equal(http.StatusOK))
+		}
+	})
+
+	It("supports group method helpers", func() {
+		r := q.New()
+		g := r.Group("/api")
+		h := func(c *q.Context) { c.Text(http.StatusOK, "ok") }
+
+		g.POST("/r", h)
+		g.PUT("/r", h)
+		g.DELETE("/r", h)
+		g.PATCH("/r", h)
+		g.OPTIONS("/r", h)
+		g.HEAD("/r", h)
+
+		for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions, http.MethodHead} {
+			rr := httptest.NewRecorder()
+			r.ServeHTTP(rr, httptest.NewRequest(m, "/api/r", nil))
+			Expect(rr.Code).To(Equal(http.StatusOK))
+		}
 	})
 })

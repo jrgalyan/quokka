@@ -44,4 +44,45 @@ var _ = Describe("Server", func() {
 		s := q.NewServer(q.ServerConfig{Addr: ":0", TLSConfig: cfg}, r, nil)
 		Expect(s.HTTP.TLSConfig).To(Equal(cfg))
 	})
+
+	It("applies ReadHeaderTimeout default of 5 seconds", func() {
+		r := http.NewServeMux()
+		s := q.NewServer(q.ServerConfig{}, r, nil)
+		Expect(s.HTTP.ReadHeaderTimeout).To(Equal(5 * time.Second))
+	})
+
+	It("uses custom ReadHeaderTimeout when provided", func() {
+		r := http.NewServeMux()
+		s := q.NewServer(q.ServerConfig{ReadHeaderTimeout: 10 * time.Second}, r, nil)
+		Expect(s.HTTP.ReadHeaderTimeout).To(Equal(10 * time.Second))
+	})
+
+	It("uses custom timeouts when provided", func() {
+		r := http.NewServeMux()
+		s := q.NewServer(q.ServerConfig{
+			Addr:         ":9090",
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}, r, nil)
+		Expect(s.HTTP.Addr).To(Equal(":9090"))
+		Expect(s.HTTP.ReadTimeout).To(Equal(5 * time.Second))
+		Expect(s.HTTP.WriteTimeout).To(Equal(10 * time.Second))
+		Expect(s.HTTP.IdleTimeout).To(Equal(60 * time.Second))
+	})
+
+	It("returns error for TLS config without certificates", func() {
+		r := http.NewServeMux()
+		cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+		s := q.NewServer(q.ServerConfig{Addr: ":0", TLSConfig: cfg}, r, nil)
+		err := s.Start()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("no certificates"))
+	})
+
+	It("creates logger when nil is provided", func() {
+		r := http.NewServeMux()
+		s := q.NewServer(q.ServerConfig{}, r, nil)
+		Expect(s.Logger).NotTo(BeNil())
+	})
 })

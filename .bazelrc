@@ -1,5 +1,0 @@
-# Enable bzlmod (should be default for recent Bazel)
-common --enable_bzlmod
-
-# Show verbose failures
-build --verbose_failures

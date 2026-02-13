@@ -20,16 +20,20 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 )
+
+var idCounter uint64
 
 func randomID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return time.Now().UTC().Format("20060102150405.000000000")
+		return fmt.Sprintf("%s-%d", time.Now().UTC().Format("20060102150405.000000000"), atomic.AddUint64(&idCounter, 1))
 	}
 	return hex.EncodeToString(b)
 }
@@ -57,11 +61,15 @@ func Logger(logger *slog.Logger) Middleware {
 			start := time.Now()
 			next(c)
 			dur := time.Since(start)
+			status := c.status
+			if status == 0 {
+				status = http.StatusOK
+			}
 			logger.Info("request",
 				slog.String("id", id),
 				slog.String("method", c.R.Method),
 				slog.String("path", c.R.URL.Path),
-				slog.Int("status", c.status),
+				slog.Int("status", status),
 				slog.String("duration", dur.String()),
 			)
 		}

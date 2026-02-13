@@ -84,12 +84,17 @@ func JWTAuth(cfg JWTConfig) Middleware {
 			}
 			tokStr := parts[1]
 
-			parser := jwt.NewParser(
-				jwt.WithAudience(cfg.Audience),
-				jwt.WithIssuer(cfg.Issuer),
+			opts := []jwt.ParserOption{
 				jwt.WithValidMethods([]string{"HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256", "EdDSA"}),
 				jwt.WithLeeway(cfg.Skew),
-			)
+			}
+			if cfg.Issuer != "" {
+				opts = append(opts, jwt.WithIssuer(cfg.Issuer))
+			}
+			if cfg.Audience != "" {
+				opts = append(opts, jwt.WithAudience(cfg.Audience))
+			}
+			parser := jwt.NewParser(opts...)
 
 			var claims jwt.MapClaims
 			tok, err := parser.ParseWithClaims(tokStr, jwt.MapClaims{}, cfg.Keyfunc)
@@ -118,6 +123,8 @@ func unauthorized(c *Context, desc string) {
 
 // escapeAuthParam per RFC 6750 to safely include in WWW-Authenticate param
 func escapeAuthParam(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
 	return s

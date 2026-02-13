@@ -19,6 +19,7 @@ package quokka
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -34,11 +35,12 @@ type Server struct {
 }
 
 type ServerConfig struct {
-	Addr         string
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	IdleTimeout  time.Duration
-	TLSConfig    *tls.Config
+	Addr              string
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	ReadHeaderTimeout time.Duration
+	TLSConfig         *tls.Config
 }
 
 func NewServer(cfg ServerConfig, handler http.Handler, logger *slog.Logger) *Server {
@@ -49,12 +51,13 @@ func NewServer(cfg ServerConfig, handler http.Handler, logger *slog.Logger) *Ser
 		cfg.Addr = ":8080"
 	}
 	hs := &http.Server{
-		Addr:         cfg.Addr,
-		Handler:      handler,
-		ReadTimeout:  defaultDur(cfg.ReadTimeout, 15*time.Second),
-		WriteTimeout: defaultDur(cfg.WriteTimeout, 30*time.Second),
-		IdleTimeout:  defaultDur(cfg.IdleTimeout, 120*time.Second),
-		TLSConfig:    cfg.TLSConfig,
+		Addr:              cfg.Addr,
+		Handler:           handler,
+		ReadTimeout:       defaultDur(cfg.ReadTimeout, 15*time.Second),
+		WriteTimeout:      defaultDur(cfg.WriteTimeout, 30*time.Second),
+		IdleTimeout:       defaultDur(cfg.IdleTimeout, 120*time.Second),
+		ReadHeaderTimeout: defaultDur(cfg.ReadHeaderTimeout, 5*time.Second),
+		TLSConfig:         cfg.TLSConfig,
 	}
 	return &Server{HTTP: hs, Logger: logger}
 }
@@ -75,10 +78,15 @@ func (s *Server) Start() error {
 		s.Logger.Info("shutdown signal received", slog.String("signal", sig.String()))
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = s.HTTP.Shutdown(ctx)
+		if err := s.HTTP.Shutdown(ctx); err != nil {
+			s.Logger.Error("shutdown error", slog.Any("err", err))
+		}
 	}()
 	s.Logger.Info("server starting", slog.String("addr", s.HTTP.Addr))
 	if s.HTTP.TLSConfig != nil {
+		if len(s.HTTP.TLSConfig.Certificates) == 0 && s.HTTP.TLSConfig.GetCertificate == nil {
+			return errors.New("quokka: TLSConfig has no certificates and no GetCertificate function")
+		}
 		return s.HTTP.ListenAndServeTLS("", "")
 	}
 	return s.HTTP.ListenAndServe()

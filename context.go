@@ -17,6 +17,7 @@
 package quokka
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -27,11 +28,12 @@ import (
 
 // Context wraps http primitives and offers helpers for params, JSON, etc.
 type Context struct {
-	W      http.ResponseWriter
-	R      *http.Request
-	params map[string]string
-	status int
-	wrote  bool
+	W           http.ResponseWriter
+	R           *http.Request
+	params      map[string]string
+	status      int
+	wrote       bool
+	maxBodySize int64
 }
 
 func newContext(w http.ResponseWriter, r *http.Request) *Context {
@@ -43,7 +45,9 @@ func (c *Context) Param(name string) string { return c.params[name] }
 func (c *Context) Query(key string) string { return c.R.URL.Query().Get(key) }
 
 func (c *Context) Form(key string) string {
-	_ = c.R.ParseForm()
+	if err := c.R.ParseForm(); err != nil {
+		slog.Debug("form parse error", slog.Any("err", err))
+	}
 	return c.R.FormValue(key)
 }
 
@@ -56,40 +60,63 @@ func (c *Context) BindJSON(dst any) error {
 			slog.Debug("error closing body", slog.String("error", err.Error()))
 		}
 	}(c.R.Body)
-	dec := json.NewDecoder(io.LimitReader(c.R.Body, 10<<20)) // 10MB limit
+	limit := c.maxBodySize
+	if limit <= 0 {
+		limit = 10 << 20 // 10MB default
+	}
+	dec := json.NewDecoder(io.LimitReader(c.R.Body, limit))
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)
 }
 
 func (c *Context) JSON(code int, v any) {
-	if !c.wrote {
-		c.W.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if c.wrote {
+		return
 	}
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+		slog.Error("JSON encoding failed", slog.Any("err", err))
+		c.W.WriteHeader(http.StatusInternalServerError)
+		c.status = http.StatusInternalServerError
+		c.wrote = true
+		return
+	}
+	c.W.Header().Set("Content-Type", "application/json; charset=utf-8")
 	c.status = code
 	c.W.WriteHeader(code)
-	_ = json.NewEncoder(c.W).Encode(v)
+	if _, err := c.W.Write(buf.Bytes()); err != nil {
+		slog.Debug("response write error", slog.Any("err", err))
+	}
 	c.wrote = true
 }
 
 // Text writes a plain text response
 func (c *Context) Text(code int, s string) {
-	if !c.wrote {
-		c.W.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if c.wrote {
+		return
 	}
+	c.W.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	c.status = code
 	c.W.WriteHeader(code)
-	_, _ = c.W.Write([]byte(s))
+	if _, err := c.W.Write([]byte(s)); err != nil {
+		slog.Debug("response write error", slog.Any("err", err))
+	}
 	c.wrote = true
 }
 
 // Bytes writes arbitrary bytes with a content type
 func (c *Context) Bytes(code int, b []byte, contentType string) {
-	if contentType != "" && !c.wrote {
+	if c.wrote {
+		return
+	}
+	if contentType != "" {
 		c.W.Header().Set("Content-Type", contentType)
 	}
 	c.status = code
 	c.W.WriteHeader(code)
-	_, _ = c.W.Write(b)
+	if _, err := c.W.Write(b); err != nil {
+		slog.Debug("response write error", slog.Any("err", err))
+	}
 	c.wrote = true
 }
 
@@ -110,7 +137,7 @@ func (c *Context) SetHeader(k, v string) { c.W.Header().Set(k, v) }
 
 // SetCookie adds a Set-Cookie header for name/value with optional attributes
 func (c *Context) SetCookie(name, value string, attrs *http.Cookie) {
-	ck := &http.Cookie{Name: name, Value: url.QueryEscape(value)}
+	ck := &http.Cookie{Name: name, Value: url.PathEscape(value)}
 	if attrs != nil {
 		// copy selected attributes
 		ck.Path = attrs.Path
@@ -130,7 +157,10 @@ func (c *Context) Cookie(name string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	v, _ := url.QueryUnescape(ck.Value)
+	v, err := url.PathUnescape(ck.Value)
+	if err != nil {
+		return "", false
+	}
 	return v, true
 }
 

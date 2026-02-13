@@ -19,9 +19,9 @@ package quokka
 import (
 	"context"
 	"net/http"
-	"os"
 	"path"
 	"strings"
+	"sync"
 )
 
 // Handler is the framework handler signature.
@@ -33,10 +33,12 @@ type Middleware func(Handler) Handler
 
 // Router provides HTTP method routing with middleware chaining and groups.
 type Router struct {
-	root     *node
-	mw       []Middleware
-	notFound Handler
-	methodNA Handler
+	mu          sync.RWMutex
+	root        *node
+	mw          []Middleware
+	notFound    Handler
+	methodNA    Handler
+	MaxBodySize int64 // max request body bytes for BindJSON; 0 means 10MB default
 }
 
 type node struct {
@@ -56,13 +58,25 @@ func New() *Router {
 }
 
 // Use adds router-level middleware.
-func (r *Router) Use(mw ...Middleware) { r.mw = append(r.mw, mw...) }
+func (r *Router) Use(mw ...Middleware) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mw = append(r.mw, mw...)
+}
 
 // NotFound sets a custom handler for 404 responses. It is wrapped with router middleware.
-func (r *Router) NotFound(h Handler) { r.notFound = chain(r.mw, h) }
+func (r *Router) NotFound(h Handler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.notFound = chain(r.mw, h)
+}
 
 // MethodNotAllowed sets a custom handler for 405 responses. It is wrapped with router middleware.
-func (r *Router) MethodNotAllowed(h Handler) { r.methodNA = chain(r.mw, h) }
+func (r *Router) MethodNotAllowed(h Handler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.methodNA = chain(r.mw, h)
+}
 
 // Handle registers a route handler for method and path.
 func (r *Router) Handle(method, p string, h Handler, mw ...Middleware) {
@@ -70,6 +84,11 @@ func (r *Router) Handle(method, p string, h Handler, mw ...Middleware) {
 }
 
 func (r *Router) handleWithPrefix(prefix, method, p string, h Handler, mw ...Middleware) {
+	if h == nil {
+		panic("quokka: nil handler")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if p == "" || p[0] != '/' {
 		panic("path must start with /")
 	}
@@ -162,72 +181,33 @@ func (r *Router) ServeFiles(prefix string, fs http.FileSystem) {
 
 // File serves a single file at exact path.
 func (r *Router) File(p, fpath string) {
-	h := func(c *Context) { http.ServeFile(c.W, c.R, resolveFilePath(fpath)) }
+	h := func(c *Context) { http.ServeFile(c.W, c.R, fpath) }
 	r.GET(p, h)
 	r.HEAD(p, h)
-}
-
-// resolveFilePath attempts to resolve relative paths in Bazel test environments.
-// If TEST_SRCDIR/TEST_WORKSPACE are set, it will look up the file in runfiles.
-// It tries multiple candidates to be resilient to differences between bzlmod and WORKSPACE setups.
-func resolveFilePath(p string) string {
-	if path.IsAbs(p) {
-		return p
-	}
-	// Try as-is relative to current working directory
-	if _, err := os.Stat(p); err == nil {
-		return p
-	}
-	// Try Bazel runfiles locations
-	sr := os.Getenv("TEST_SRCDIR")
-	ws := os.Getenv("TEST_WORKSPACE")
-	if sr != "" {
-		candidates := []string{}
-		if ws != "" {
-			candidates = append(candidates, path.Join(sr, ws, p))
-		}
-		// Always try _main as a fallback for the primary repo under bzlmod
-		candidates = append(candidates, path.Join(sr, "_main", p))
-		for _, cand := range candidates {
-			if _, err := os.Stat(cand); err == nil {
-				return cand
-			}
-		}
-	}
-	// Try RUNFILES_DIR independently (some environments only set this)
-	if rd := os.Getenv("RUNFILES_DIR"); rd != "" {
-		candidates := []string{path.Join(rd, p), path.Join(rd, "_main", p)}
-		if ws != "" {
-			candidates = append(candidates, path.Join(rd, ws, p))
-		}
-		for _, cand := range candidates {
-			if _, err := os.Stat(cand); err == nil {
-				return cand
-			}
-		}
-	}
-	return p
 }
 
 // ServeHTTP implements http.Handler.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	c := newContext(w, req)
-	n, params := r.find(req.Method, req.URL.Path)
-	if n == nil {
-		// path not found OR method not allowed
-		n2, _ := r.find("*", req.URL.Path)
-		if n2 == nil {
-			r.notFound(c)
-			return
-		}
-		r.methodNA(c)
-		return
+
+	r.mu.RLock()
+	n, params := r.find(req.URL.Path)
+	var h Handler
+	if n == nil || len(n.handlers) == 0 {
+		h = r.notFound
+	} else if handler, ok := n.handlers[strings.ToUpper(req.Method)]; !ok {
+		h = r.methodNA
+	} else {
+		c.params = params
+		h = handler
 	}
-	c.params = params
-	n.handlers[strings.ToUpper(req.Method)](c)
+	c.maxBodySize = r.MaxBodySize
+	r.mu.RUnlock()
+
+	h(c)
 }
 
-func (r *Router) find(method, pathStr string) (*node, map[string]string) {
+func (r *Router) find(pathStr string) (*node, map[string]string) {
 	parts := splitPath(pathStr)
 	n := r.root
 	params := map[string]string{}
@@ -254,12 +234,6 @@ func (r *Router) find(method, pathStr string) (*node, map[string]string) {
 		}
 		n = next
 	}
-	if method == "*" {
-		return n, params
-	}
-	if _, ok := n.handlers[strings.ToUpper(method)]; !ok {
-		return nil, params
-	}
 	return n, params
 }
 
@@ -268,7 +242,14 @@ func splitPath(p string) []string {
 	if p == "" {
 		return []string{}
 	}
-	return strings.Split(p, "/")
+	raw := strings.Split(p, "/")
+	parts := raw[:0]
+	for _, s := range raw {
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return parts
 }
 
 func matchChild(n *node, seg string) *node {
@@ -276,11 +257,16 @@ func matchChild(n *node, seg string) *node {
 		if ch.segment == seg {
 			return ch
 		}
-		if strings.HasPrefix(seg, ":") && ch.param && ch.segment == seg {
-			return ch
-		}
 		if seg == "*" && ch.wildcard {
 			return ch
+		}
+	}
+	// Detect conflicting param names at the same level (e.g. :id vs :userId).
+	if strings.HasPrefix(seg, ":") {
+		for _, ch := range n.children {
+			if ch.param {
+				panic("quokka: conflicting param name " + seg + ", existing " + ch.segment)
+			}
 		}
 	}
 	return nil
