@@ -42,5 +42,5 @@ Responses are JSON. Errors follow a structured format: {"error":"...","message":
 
 ### Notes
 - Storage is in-memory and resets on restart.
-- Middleware in use: Recover and Logger (request id and structured access logs).
-- Graceful shutdown on SIGINT/SIGTERM with a 5s timeout.
+- Middleware in use: Recover, Logger (request id and structured access logs), CORS, and SecurityHeaders.
+- Graceful shutdown via `quokka.NewServer` on SIGINT/SIGTERM.

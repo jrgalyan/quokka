@@ -17,18 +17,13 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/jrgalyan/quokka"
@@ -138,7 +133,12 @@ func main() {
 	st := newStore()
 
 	r := quokka.New()
-	r.Use(quokka.Recover(logger), quokka.Logger(logger))
+	r.Use(
+		quokka.Recover(logger),
+		quokka.Logger(logger),
+		quokka.CORS(quokka.DefaultCORSConfig()),
+		quokka.SecurityHeaders(quokka.DefaultSecurityHeadersConfig()),
+	)
 
 	// Health
 	r.GET("/health", func(c *quokka.Context) { c.JSON(http.StatusOK, map[string]string{"status": "ok"}) })
@@ -220,15 +220,8 @@ func main() {
 	// PATCH partial
 	api.PATCH("/todos/:id", func(c *quokka.Context) {
 		id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-		dec := json.NewDecoder(c.R.Body)
-		defer func(Body io.ReadCloser) {
-			err := Body.Close()
-			if err != nil {
-				slog.Debug("error closing body", slog.String("error", err.Error()))
-			}
-		}(c.R.Body)
 		var fields map[string]any
-		if err := dec.Decode(&fields); err != nil {
+		if err := c.BindJSON(&fields); err != nil {
 			c.JSON(http.StatusBadRequest, quokka.ErrorResponse{Error: "invalid_json"})
 			return
 		}
@@ -249,28 +242,13 @@ func main() {
 		c.Status(http.StatusNotFound)
 	})
 
-	// Start server with graceful shutdown
 	addr := ":8080"
 	if p := os.Getenv("PORT"); p != "" {
 		addr = ":" + p
 	}
-	server := &http.Server{Addr: addr, Handler: r}
-
-	go func() {
-		logger.Info("starting example service", slog.String("addr", addr))
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server error", slog.Any("err", err))
-			os.Exit(1)
-		}
-	}()
-
-	// Wait for SIGINT/SIGTERM
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
-	<-sigc
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = server.Shutdown(ctx)
-	logger.Info("server stopped")
+	srv := quokka.NewServer(quokka.ServerConfig{Addr: addr}, r, logger)
+	if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Error("server error", slog.Any("err", err))
+		os.Exit(1)
+	}
 }
