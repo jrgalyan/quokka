@@ -16,19 +16,21 @@
 
 package quokka
 
-import "errors"
+import "net/http"
 
-// Sentinel errors used by the router and available to ErrorHandler implementations.
-var (
-	ErrNotFound         = errors.New("not found")
-	ErrMethodNotAllowed = errors.New("method not allowed")
-)
-
-// ErrorResponse is a consistent error payload loosely inspired by RFC 9457 (Problem Details for HTTP APIs).
-// It does not use the application/problem+json media type or the RFC's field names.
-type ErrorResponse struct {
-	Error   string            `json:"error"`
-	Message string            `json:"message,omitempty"`
-	Code    string            `json:"code,omitempty"`
-	Details map[string]string `json:"details,omitempty"`
+// BodyLimit creates a middleware that restricts the maximum size of the request
+// body. If the client sends more than maxBytes, subsequent reads from the body
+// will return an error and the handler is responsible for returning an
+// appropriate status (typically 413 Request Entity Too Large).
+//
+// A maxBytes of 0 or negative means no limit is enforced.
+func BodyLimit(maxBytes int64) Middleware {
+	return func(next Handler) Handler {
+		return func(c *Context) {
+			if maxBytes > 0 {
+				c.R.Body = http.MaxBytesReader(c.W, c.R.Body, maxBytes)
+			}
+			next(c)
+		}
+	}
 }

@@ -48,7 +48,7 @@ func JWTClaims(ctx context.Context) (jwt.MapClaims, bool) {
 
 // JWTConfig configures the JWT middleware.
 // Provide at least a Keyfunc to resolve the verification key.
-// Optional fields can enforce issuer/audience and clock skew.
+// Issuer, Audience, Skew fields can enforce issuer/audience and clock skew.
 // If Optional is true, requests without Authorization header pass through unmodified.
 // Only Bearer tokens are considered.
 // Errors result in 401 with WWW-Authenticate and JSON error payload.

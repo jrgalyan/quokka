@@ -19,8 +19,11 @@ package quokka_test
 import (
 	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -256,5 +259,119 @@ var _ = Describe("Context", func() {
 		rr := httptest.NewRecorder()
 		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/c", nil))
 		Expect(rr.Code).To(Equal(http.StatusNotFound))
+	})
+
+	It("handles single file upload via FormFile", func() {
+		r := q.New()
+		r.POST("/upload", func(c *q.Context) {
+			fh, err := c.FormFile("file")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, q.ErrorResponse{Error: err.Error()})
+				return
+			}
+			c.Text(http.StatusOK, fh.Filename)
+		})
+
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		fw, _ := mw.CreateFormFile("file", "test.txt")
+		_, _ = fw.Write([]byte("file content"))
+		_ = mw.Close()
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/upload", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		r.ServeHTTP(rr, req)
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Body.String()).To(Equal("test.txt"))
+	})
+
+	It("handles multiple file uploads via FormFiles", func() {
+		r := q.New()
+		r.POST("/upload", func(c *q.Context) {
+			fhs, err := c.FormFiles("files")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, q.ErrorResponse{Error: err.Error()})
+				return
+			}
+			names := ""
+			for _, fh := range fhs {
+				names += fh.Filename + ","
+			}
+			c.Text(http.StatusOK, names)
+		})
+
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		fw, _ := mw.CreateFormFile("files", "a.txt")
+		_, _ = fw.Write([]byte("aaa"))
+		fw, _ = mw.CreateFormFile("files", "b.txt")
+		_, _ = fw.Write([]byte("bbb"))
+		_ = mw.Close()
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/upload", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		r.ServeHTTP(rr, req)
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Body.String()).To(Equal("a.txt,b.txt,"))
+	})
+
+	It("saves uploaded file to disk", func() {
+		r := q.New()
+		r.POST("/upload", func(c *q.Context) {
+			fh, err := c.FormFile("file")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, q.ErrorResponse{Error: err.Error()})
+				return
+			}
+			dst := filepath.Join(os.TempDir(), "quokka_test_upload.txt")
+			if err := c.SaveFile(fh, dst); err != nil {
+				c.JSON(http.StatusInternalServerError, q.ErrorResponse{Error: err.Error()})
+				return
+			}
+			c.Text(http.StatusOK, dst)
+		})
+
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		fw, _ := mw.CreateFormFile("file", "save.txt")
+		_, _ = fw.Write([]byte("saved content"))
+		_ = mw.Close()
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/upload", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		r.ServeHTTP(rr, req)
+		Expect(rr.Code).To(Equal(http.StatusOK))
+
+		dst := rr.Body.String()
+		data, err := os.ReadFile(dst)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(Equal("saved content"))
+		_ = os.Remove(dst)
+	})
+
+	It("returns error for missing file in FormFile", func() {
+		r := q.New()
+		r.POST("/upload", func(c *q.Context) {
+			_, err := c.FormFile("file")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, q.ErrorResponse{Error: err.Error()})
+				return
+			}
+			c.Status(http.StatusOK)
+		})
+
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		_ = mw.WriteField("other", "value")
+		_ = mw.Close()
+
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/upload", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		r.ServeHTTP(rr, req)
+		Expect(rr.Code).To(Equal(http.StatusBadRequest))
 	})
 })

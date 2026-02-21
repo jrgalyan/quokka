@@ -265,4 +265,150 @@ var _ = Describe("Router", func() {
 			Expect(rr.Code).To(Equal(http.StatusOK))
 		}
 	})
+
+	It("silently matches trailing slash without redirect by default", func() {
+		r := q.New()
+		r.GET("/api/users", func(c *q.Context) { c.Text(http.StatusOK, "users") })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/users/", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Body.String()).To(Equal("users"))
+	})
+
+	It("redirects trailing slash when RedirectTrailingSlash is enabled", func() {
+		r := q.New()
+		r.RedirectTrailingSlash = true
+		r.GET("/api/users", func(c *q.Context) { c.Text(http.StatusOK, "users") })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/users/", nil))
+		Expect(rr.Code).To(Equal(http.StatusMovedPermanently))
+		Expect(rr.Header().Get("Location")).To(Equal("/api/users"))
+	})
+
+	It("preserves query string in trailing slash redirect", func() {
+		r := q.New()
+		r.RedirectTrailingSlash = true
+		r.GET("/search", func(c *q.Context) { c.Text(http.StatusOK, "ok") })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/search/?q=hello", nil))
+		Expect(rr.Code).To(Equal(http.StatusMovedPermanently))
+		Expect(rr.Header().Get("Location")).To(Equal("/search?q=hello"))
+	})
+
+	It("does not redirect when path has no trailing slash", func() {
+		r := q.New()
+		r.RedirectTrailingSlash = true
+		r.GET("/api/users", func(c *q.Context) { c.Text(http.StatusOK, "users") })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/users", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+	})
+
+	It("auto HEAD returns 200 with headers for GET route", func() {
+		r := q.New()
+		r.GET("/items", func(c *q.Context) {
+			c.SetHeader("X-Total", "42")
+			c.Text(http.StatusOK, "body")
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodHead, "/items", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Header().Get("X-Total")).To(Equal("42"))
+	})
+
+	It("prefers explicit HEAD handler over auto HEAD", func() {
+		r := q.New()
+		r.GET("/items", func(c *q.Context) { c.Text(http.StatusOK, "get") })
+		r.HEAD("/items", func(c *q.Context) {
+			c.SetHeader("X-Custom", "head")
+			c.Status(http.StatusOK)
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodHead, "/items", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Header().Get("X-Custom")).To(Equal("head"))
+	})
+
+	It("returns 405 for HEAD when no GET handler exists", func() {
+		r := q.New()
+		r.POST("/items", func(c *q.Context) { c.Status(http.StatusCreated) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodHead, "/items", nil))
+		Expect(rr.Code).To(Equal(http.StatusMethodNotAllowed))
+	})
+
+	It("auto HEAD works with path params", func() {
+		r := q.New()
+		r.GET("/items/:id", func(c *q.Context) {
+			c.SetHeader("X-Id", c.Param("id"))
+			c.Text(http.StatusOK, c.Param("id"))
+		})
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodHead, "/items/123", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(rr.Header().Get("X-Id")).To(Equal("123"))
+	})
+
+	It("calls ErrorHandler on 404 when set", func() {
+		r := q.New()
+		r.ErrorHandler = func(c *q.Context, status int, err error) {
+			c.JSON(status, q.ErrorResponse{Error: err.Error(), Code: "CUSTOM_404"})
+		}
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/missing", nil))
+		Expect(rr.Code).To(Equal(http.StatusNotFound))
+		Expect(rr.Body.String()).To(ContainSubstring("CUSTOM_404"))
+	})
+
+	It("calls ErrorHandler on 405 when set", func() {
+		r := q.New()
+		r.POST("/things", func(c *q.Context) { c.Status(http.StatusCreated) })
+		r.ErrorHandler = func(c *q.Context, status int, err error) {
+			c.JSON(status, q.ErrorResponse{Error: err.Error(), Code: "CUSTOM_405"})
+		}
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/things", nil))
+		Expect(rr.Code).To(Equal(http.StatusMethodNotAllowed))
+		Expect(rr.Body.String()).To(ContainSubstring("CUSTOM_405"))
+	})
+
+	It("uses default notFound/methodNA when ErrorHandler is nil", func() {
+		r := q.New()
+		r.POST("/things", func(c *q.Context) { c.Status(http.StatusCreated) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/missing", nil))
+		Expect(rr.Code).To(Equal(http.StatusNotFound))
+
+		rr = httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/things", nil))
+		Expect(rr.Code).To(Equal(http.StatusMethodNotAllowed))
+	})
+
+	It("applies middleware around ErrorHandler", func() {
+		r := q.New()
+		order := []string{}
+		r.Use(func(next q.Handler) q.Handler {
+			return func(c *q.Context) { order = append(order, "mw"); next(c) }
+		})
+		r.ErrorHandler = func(c *q.Context, status int, err error) {
+			order = append(order, "eh")
+			c.Status(status)
+		}
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/missing", nil))
+		Expect(rr.Code).To(Equal(http.StatusNotFound))
+		Expect(order).To(Equal([]string{"mw", "eh"}))
+	})
 })

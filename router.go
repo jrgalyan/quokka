@@ -39,6 +39,17 @@ type Router struct {
 	notFound    Handler
 	methodNA    Handler
 	MaxBodySize int64 // max request body bytes for BindJSON; 0 means 10MB default
+
+	// RedirectTrailingSlash, when true, causes the router to issue a 301
+	// redirect when a request path has a trailing slash but the registered
+	// route does not (e.g. /api/users/ → /api/users). The query string is
+	// preserved across the redirect.
+	RedirectTrailingSlash bool
+
+	// ErrorHandler, when set, is called instead of the default notFound and
+	// methodNA handlers. It receives the Context, the HTTP status code
+	// (404 or 405), and a sentinel error (ErrNotFound or ErrMethodNotAllowed).
+	ErrorHandler func(*Context, int, error)
 }
 
 type node struct {
@@ -191,15 +202,37 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	c := newContext(w, req)
 
 	r.mu.RLock()
-	n, params := r.find(req.URL.Path)
+
+	// Trailing slash redirect: if enabled and path ends with "/" (but is not
+	// the root), redirect to the trimmed path preserving the query string.
+	urlPath := req.URL.Path
+	if r.RedirectTrailingSlash && len(urlPath) > 1 && strings.HasSuffix(urlPath, "/") {
+		target := strings.TrimRight(urlPath, "/")
+		if q := req.URL.RawQuery; q != "" {
+			target += "?" + q
+		}
+		r.mu.RUnlock()
+		http.Redirect(w, req, target, http.StatusMovedPermanently)
+		return
+	}
+
+	n, params := r.find(urlPath)
 	var h Handler
 	if n == nil || len(n.handlers) == 0 {
-		h = r.notFound
-	} else if handler, ok := n.handlers[strings.ToUpper(req.Method)]; !ok {
-		h = r.methodNA
-	} else {
+		h = r.errorHandler(http.StatusNotFound, ErrNotFound)
+	} else if handler, ok := n.handlers[strings.ToUpper(req.Method)]; ok {
 		c.params = params
 		h = handler
+	} else if req.Method == http.MethodHead {
+		// Auto HEAD: fall back to the GET handler if no explicit HEAD handler exists.
+		if getHandler, gok := n.handlers[http.MethodGet]; gok {
+			c.params = params
+			h = getHandler
+		} else {
+			h = r.errorHandler(http.StatusMethodNotAllowed, ErrMethodNotAllowed)
+		}
+	} else {
+		h = r.errorHandler(http.StatusMethodNotAllowed, ErrMethodNotAllowed)
 	}
 	c.maxBodySize = r.MaxBodySize
 	mw := r.mw
@@ -207,6 +240,20 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	h = chain(mw, h)
 	h(c)
+}
+
+// errorHandler returns the appropriate handler for the given status/error.
+// When a custom ErrorHandler is set it is used; otherwise the default
+// notFound/methodNA handlers are returned.
+func (r *Router) errorHandler(status int, err error) Handler {
+	if r.ErrorHandler != nil {
+		eh := r.ErrorHandler
+		return func(c *Context) { eh(c, status, err) }
+	}
+	if status == http.StatusMethodNotAllowed {
+		return r.methodNA
+	}
+	return r.notFound
 }
 
 func (r *Router) find(pathStr string) (*node, map[string]string) {

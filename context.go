@@ -22,8 +22,10 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
 )
 
 // Context wraps http primitives and offers helpers for params, JSON, etc.
@@ -172,6 +174,62 @@ func (c *Context) Status(code int) {
 	c.status = code
 	c.W.WriteHeader(code)
 	c.wrote = true
+}
+
+// FormFile returns the first file for the provided form key.
+// It parses the multipart form if it has not been parsed yet.
+func (c *Context) FormFile(name string) (*multipart.FileHeader, error) {
+	limit := c.maxBodySize
+	if limit <= 0 {
+		limit = 10 << 20
+	}
+	if err := c.R.ParseMultipartForm(limit); err != nil {
+		return nil, err
+	}
+	f, fh, err := c.R.FormFile(name)
+	if err != nil {
+		return nil, err
+	}
+	_ = f.Close()
+	return fh, nil
+}
+
+// FormFiles returns all files for the provided form key.
+// It parses the multipart form if it has not been parsed yet.
+func (c *Context) FormFiles(name string) ([]*multipart.FileHeader, error) {
+	limit := c.maxBodySize
+	if limit <= 0 {
+		limit = 10 << 20
+	}
+	if err := c.R.ParseMultipartForm(limit); err != nil {
+		return nil, err
+	}
+	if c.R.MultipartForm == nil || c.R.MultipartForm.File == nil {
+		return nil, http.ErrMissingFile
+	}
+	fhs, ok := c.R.MultipartForm.File[name]
+	if !ok || len(fhs) == 0 {
+		return nil, http.ErrMissingFile
+	}
+	return fhs, nil
+}
+
+// SaveFile copies an uploaded file to the given destination path on disk.
+func (c *Context) SaveFile(fh *multipart.FileHeader, dst string) error {
+	src, err := fh.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+
+	_, err = io.Copy(out, src)
+	return err
 }
 
 func (c *Context) Context() context.Context { return c.R.Context() }
