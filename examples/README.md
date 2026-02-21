@@ -6,19 +6,17 @@ This directory contains runnable examples demonstrating how to build services wi
 
 A fully-functional, in-memory Todos REST API showing all common HTTP methods and quokka features (routing, middleware, static files, graceful shutdown).
 
-Target: //examples:todos_example
-
 ### Build
 
-    bazel build //examples/todos:todos_example
+    go build ./examples/todos
 
 ### Run
 
-    bazel run //examples/todos:todos_example
+    go run ./examples/todos
 
 The service listens on port 8080 by default. Set PORT to override:
 
-    PORT=9090 bazel run //examples/todos:todos_example
+    PORT=9090 go run ./examples/todos
 
 ### API
 
