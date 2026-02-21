@@ -120,20 +120,36 @@ func (r *Router) handleWithPrefix(prefix, method, p string, h Handler, mw ...Mid
 	n.handlers[strings.ToUpper(method)] = h
 }
 
-// Method helpers
-func (r *Router) GET(p string, h Handler, mw ...Middleware)  { r.Handle(http.MethodGet, p, h, mw...) }
-func (r *Router) POST(p string, h Handler, mw ...Middleware) { r.Handle(http.MethodPost, p, h, mw...) }
-func (r *Router) PUT(p string, h Handler, mw ...Middleware)  { r.Handle(http.MethodPut, p, h, mw...) }
+// GET registers a handler for GET requests to the given path.
+func (r *Router) GET(p string, h Handler, mw ...Middleware) { r.Handle(http.MethodGet, p, h, mw...) }
+
+// POST registers a handler for POST requests to the given path.
+func (r *Router) POST(p string, h Handler, mw ...Middleware) {
+	r.Handle(http.MethodPost, p, h, mw...)
+}
+
+// PUT registers a handler for PUT requests to the given path.
+func (r *Router) PUT(p string, h Handler, mw ...Middleware) { r.Handle(http.MethodPut, p, h, mw...) }
+
+// DELETE registers a handler for DELETE requests to the given path.
 func (r *Router) DELETE(p string, h Handler, mw ...Middleware) {
 	r.Handle(http.MethodDelete, p, h, mw...)
 }
+
+// PATCH registers a handler for PATCH requests to the given path.
 func (r *Router) PATCH(p string, h Handler, mw ...Middleware) {
 	r.Handle(http.MethodPatch, p, h, mw...)
 }
+
+// OPTIONS registers a handler for OPTIONS requests to the given path.
 func (r *Router) OPTIONS(p string, h Handler, mw ...Middleware) {
 	r.Handle(http.MethodOptions, p, h, mw...)
 }
-func (r *Router) HEAD(p string, h Handler, mw ...Middleware) { r.Handle(http.MethodHead, p, h, mw...) }
+
+// HEAD registers a handler for HEAD requests to the given path.
+func (r *Router) HEAD(p string, h Handler, mw ...Middleware) {
+	r.Handle(http.MethodHead, p, h, mw...)
+}
 
 // Group represents a route group with a common prefix and middleware.
 type Group struct {
@@ -157,18 +173,36 @@ func (g *Group) Handle(method, p string, h Handler, mw ...Middleware) {
 	g.r.handleWithPrefix(g.prefix, method, p, h, fullMW...)
 }
 
-// Method helpers for groups
-func (g *Group) GET(p string, h Handler, mw ...Middleware)  { g.Handle(http.MethodGet, p, h, mw...) }
-func (g *Group) POST(p string, h Handler, mw ...Middleware) { g.Handle(http.MethodPost, p, h, mw...) }
-func (g *Group) PUT(p string, h Handler, mw ...Middleware)  { g.Handle(http.MethodPut, p, h, mw...) }
+// GET registers a handler for GET requests within the group.
+func (g *Group) GET(p string, h Handler, mw ...Middleware) { g.Handle(http.MethodGet, p, h, mw...) }
+
+// POST registers a handler for POST requests within the group.
+func (g *Group) POST(p string, h Handler, mw ...Middleware) {
+	g.Handle(http.MethodPost, p, h, mw...)
+}
+
+// PUT registers a handler for PUT requests within the group.
+func (g *Group) PUT(p string, h Handler, mw ...Middleware) { g.Handle(http.MethodPut, p, h, mw...) }
+
+// DELETE registers a handler for DELETE requests within the group.
 func (g *Group) DELETE(p string, h Handler, mw ...Middleware) {
 	g.Handle(http.MethodDelete, p, h, mw...)
 }
-func (g *Group) PATCH(p string, h Handler, mw ...Middleware) { g.Handle(http.MethodPatch, p, h, mw...) }
+
+// PATCH registers a handler for PATCH requests within the group.
+func (g *Group) PATCH(p string, h Handler, mw ...Middleware) {
+	g.Handle(http.MethodPatch, p, h, mw...)
+}
+
+// OPTIONS registers a handler for OPTIONS requests within the group.
 func (g *Group) OPTIONS(p string, h Handler, mw ...Middleware) {
 	g.Handle(http.MethodOptions, p, h, mw...)
 }
-func (g *Group) HEAD(p string, h Handler, mw ...Middleware) { g.Handle(http.MethodHead, p, h, mw...) }
+
+// HEAD registers a handler for HEAD requests within the group.
+func (g *Group) HEAD(p string, h Handler, mw ...Middleware) {
+	g.Handle(http.MethodHead, p, h, mw...)
+}
 
 // ServeFiles serves static files under prefix from provided filesystem (GET and HEAD).
 func (r *Router) ServeFiles(prefix string, fs http.FileSystem) {
@@ -334,6 +368,7 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, ctxKeyRequestID, id)
 }
 
+// RequestID extracts the request correlation ID from ctx.
 func RequestID(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(ctxKeyRequestID).(string)
 	return v, ok

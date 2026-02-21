@@ -42,10 +42,13 @@ func newContext(w http.ResponseWriter, r *http.Request) *Context {
 	return &Context{W: w, R: r, params: map[string]string{}}
 }
 
+// Param returns the value of a path parameter by name (e.g. ":id").
 func (c *Context) Param(name string) string { return c.params[name] }
 
+// Query returns a query string parameter value by key.
 func (c *Context) Query(key string) string { return c.R.URL.Query().Get(key) }
 
+// Form returns a form field value by key, parsing the form if necessary.
 func (c *Context) Form(key string) string {
 	if err := c.R.ParseForm(); err != nil {
 		slog.Debug("form parse error", slog.Any("err", err))
@@ -53,8 +56,11 @@ func (c *Context) Form(key string) string {
 	return c.R.FormValue(key)
 }
 
+// Header returns a request header value by key.
 func (c *Context) Header(key string) string { return c.R.Header.Get(key) }
 
+// BindJSON decodes the request body as JSON into dst.
+// Unknown fields are rejected and the body is limited to MaxBodySize (default 10 MB).
 func (c *Context) BindJSON(dst any) error {
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
@@ -71,6 +77,7 @@ func (c *Context) BindJSON(dst any) error {
 	return dec.Decode(dst)
 }
 
+// JSON serializes v as JSON and writes it with the given status code.
 func (c *Context) JSON(code int, v any) {
 	if c.wrote {
 		return
@@ -232,4 +239,5 @@ func (c *Context) SaveFile(fh *multipart.FileHeader, dst string) error {
 	return err
 }
 
+// Context returns the request's context.Context.
 func (c *Context) Context() context.Context { return c.R.Context() }

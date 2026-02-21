@@ -34,6 +34,8 @@ type Server struct {
 	Logger *slog.Logger
 }
 
+// ServerConfig holds optional settings for NewServer.
+// Zero values fall back to sensible defaults (addr :8080, read 15s, write 30s, idle 120s, header 5s).
 type ServerConfig struct {
 	Addr              string
 	ReadTimeout       time.Duration
@@ -43,6 +45,8 @@ type ServerConfig struct {
 	TLSConfig         *tls.Config
 }
 
+// NewServer creates a Server with the given config, handler, and logger.
+// A nil logger defaults to slog.Default.
 func NewServer(cfg ServerConfig, handler http.Handler, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
