@@ -38,7 +38,8 @@ type Router struct {
 	mw          []Middleware
 	notFound    Handler
 	methodNA    Handler
-	MaxBodySize int64 // max request body bytes for BindJSON; 0 means 10MB default
+	MaxBodySize int64  // max request body bytes for BindJSON; 0 means 10MB default
+	UploadDir   string // base directory for SaveFile; required for path confinement
 
 	// RedirectTrailingSlash, when true, causes the router to issue a 301
 	// redirect when a request path has a trailing slash but the registered
@@ -269,6 +270,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		h = r.errorHandler(http.StatusMethodNotAllowed, ErrMethodNotAllowed)
 	}
 	c.maxBodySize = r.MaxBodySize
+	c.uploadDir = r.UploadDir
 	mw := r.mw
 	r.mu.RUnlock()
 

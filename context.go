@@ -20,13 +20,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 )
+
+// logSanitizer replaces newline characters to prevent log injection.
+var logSanitizer = strings.NewReplacer("\n", `\n`, "\r", `\r`)
 
 // Context wraps http primitives and offers helpers for params, JSON, etc.
 type Context struct {
@@ -36,6 +42,7 @@ type Context struct {
 	status      int
 	wrote       bool
 	maxBodySize int64
+	uploadDir   string // base directory for SaveFile; required for path confinement
 }
 
 func newContext(w http.ResponseWriter, r *http.Request) *Context {
@@ -65,7 +72,7 @@ func (c *Context) BindJSON(dst any) error {
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
 		if err != nil {
-			slog.Debug("error closing body", slog.String("error", err.Error()))
+			slog.Debug("error closing body", slog.String("error", logSanitizer.Replace(err.Error()))) // #nosec G706 -- newlines stripped by logSanitizer
 		}
 	}(c.R.Body)
 	limit := c.maxBodySize
@@ -221,7 +228,11 @@ func (c *Context) FormFiles(name string) ([]*multipart.FileHeader, error) {
 	return fhs, nil
 }
 
-// SaveFile copies an uploaded file to the given destination path on disk.
+// SaveFile copies an uploaded file into the router's configured UploadDir.
+// dst is treated as a relative path within UploadDir. If UploadDir is not
+// configured, dst is used directly after filepath.Clean (callers are then
+// responsible for ensuring the path is within an allowed directory).
+// Returns an error if dst would escape UploadDir.
 func (c *Context) SaveFile(fh *multipart.FileHeader, dst string) error {
 	src, err := fh.Open()
 	if err != nil {
@@ -229,7 +240,12 @@ func (c *Context) SaveFile(fh *multipart.FileHeader, dst string) error {
 	}
 	defer func() { _ = src.Close() }()
 
-	out, err := os.Create(dst)
+	resolved, err := c.resolveUploadPath(dst)
+	if err != nil {
+		return err
+	}
+
+	out, err := os.Create(resolved) // #nosec G304 -- path validated by resolveUploadPath
 	if err != nil {
 		return err
 	}
@@ -237,6 +253,27 @@ func (c *Context) SaveFile(fh *multipart.FileHeader, dst string) error {
 
 	_, err = io.Copy(out, src)
 	return err
+}
+
+// resolveUploadPath cleans dst and, when uploadDir is configured, joins it to
+// that base and verifies the resolved absolute path stays within the base.
+func (c *Context) resolveUploadPath(dst string) (string, error) {
+	cleaned := filepath.Clean(dst)
+	if c.uploadDir == "" {
+		return cleaned, nil
+	}
+	absBase, err := filepath.Abs(c.uploadDir)
+	if err != nil {
+		return "", fmt.Errorf("quokka: invalid upload directory: %w", err)
+	}
+	absTarget, err := filepath.Abs(filepath.Join(c.uploadDir, cleaned))
+	if err != nil {
+		return "", fmt.Errorf("quokka: invalid upload path: %w", err)
+	}
+	if absTarget != absBase && !strings.HasPrefix(absTarget, absBase+string(filepath.Separator)) {
+		return "", fmt.Errorf("quokka: upload path escapes configured directory")
+	}
+	return absTarget, nil
 }
 
 // Context returns the request's context.Context.
