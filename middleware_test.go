@@ -17,10 +17,14 @@
 package quokka_test
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -188,5 +192,116 @@ var _ = Describe("Middleware", func() {
 		rr := httptest.NewRecorder()
 		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/implicit", nil))
 		// Go's default behavior writes 200 implicitly; no error expected
+	})
+
+	It("Logger writes to Output writer when Logger is nil", func() {
+		var buf bytes.Buffer
+		r := q.New()
+		r.Use(q.Logger(q.LoggerConfig{Output: &buf}))
+		r.GET("/out", func(c *q.Context) { c.Status(http.StatusOK) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/out", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+		Expect(buf.String()).To(ContainSubstring("/out"))
+	})
+
+	It("Logger writes to multiple outputs via io.MultiWriter", func() {
+		var console, file bytes.Buffer
+		r := q.New()
+		r.Use(q.Logger(q.LoggerConfig{Output: io.MultiWriter(&console, &file)}))
+		r.GET("/multi", func(c *q.Context) { c.Status(http.StatusNoContent) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/multi", nil))
+		Expect(console.String()).To(ContainSubstring("/multi"))
+		Expect(file.String()).To(Equal(console.String()))
+	})
+
+	It("Logger explicit Logger field takes precedence over Output", func() {
+		var output bytes.Buffer
+		var explicit bytes.Buffer
+		explicitLogger := slog.New(slog.NewTextHandler(&explicit, nil))
+
+		r := q.New()
+		r.Use(q.Logger(q.LoggerConfig{Logger: explicitLogger, Output: &output}))
+		r.GET("/prec", func(c *q.Context) { c.Status(http.StatusOK) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/prec", nil))
+		Expect(explicit.String()).To(ContainSubstring("/prec"))
+		Expect(output.String()).To(BeEmpty())
+	})
+
+	It("OpenLogFile creates a writable log file", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "test.log")
+		f, err := q.OpenLogFile(path)
+		Expect(err).NotTo(HaveOccurred())
+		defer f.Close()
+
+		r := q.New()
+		r.Use(q.Logger(q.LoggerConfig{Output: f}))
+		r.GET("/file", func(c *q.Context) { c.Status(http.StatusOK) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/file", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+
+		Expect(f.Sync()).To(Succeed())
+		data, err := os.ReadFile(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(ContainSubstring("/file"))
+	})
+
+	It("OpenLogFile creates missing parent directories", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "a", "b", "c", "app.log")
+		f, err := q.OpenLogFile(path)
+		Expect(err).NotTo(HaveOccurred())
+		f.Close()
+		_, err = os.Stat(path)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("Logger Dir writes access.log in the given directory", func() {
+		dir := GinkgoT().TempDir()
+		r := q.New()
+		r.Use(q.Logger(q.LoggerConfig{Dir: dir}))
+		r.GET("/dirlog", func(c *q.Context) { c.Status(http.StatusOK) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/dirlog", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+
+		data, err := os.ReadFile(filepath.Join(dir, "access.log"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(data)).To(ContainSubstring("/dirlog"))
+	})
+
+	It("Logger Dir creates the directory if it does not exist", func() {
+		dir := filepath.Join(GinkgoT().TempDir(), "logs", "app")
+		r := q.New()
+		r.Use(q.Logger(q.LoggerConfig{Dir: dir}))
+		r.GET("/mkdir", func(c *q.Context) { c.Status(http.StatusOK) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/mkdir", nil))
+		Expect(rr.Code).To(Equal(http.StatusOK))
+
+		_, err := os.Stat(filepath.Join(dir, "access.log"))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("Logger Output takes precedence over Dir", func() {
+		var buf bytes.Buffer
+		dir := GinkgoT().TempDir()
+		r := q.New()
+		r.Use(q.Logger(q.LoggerConfig{Output: &buf, Dir: dir}))
+		r.GET("/prec2", func(c *q.Context) { c.Status(http.StatusOK) })
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/prec2", nil))
+		Expect(buf.String()).To(ContainSubstring("/prec2"))
+		_, err := os.Stat(filepath.Join(dir, "access.log"))
+		Expect(err).To(HaveOccurred()) // file not created
 	})
 })

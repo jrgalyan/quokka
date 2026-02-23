@@ -21,8 +21,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sync/atomic"
 	"time"
@@ -48,8 +51,19 @@ func chain(mw []Middleware, h Handler) Handler {
 
 // LoggerConfig configures the Logger middleware.
 type LoggerConfig struct {
-	// Logger is the slog.Logger used for output. nil uses slog.Default().
+	// Logger is the slog.Logger used for output. When set, Output is ignored.
+	// nil falls through to Output, then slog.Default().
 	Logger *slog.Logger
+
+	// Output directs log lines to this writer when Logger is nil.
+	// Use os.Stderr for console, an *os.File for a log file, or
+	// io.MultiWriter(os.Stderr, f) to write to both simultaneously.
+	Output io.Writer
+
+	// Dir is the directory in which to write "access.log" when Logger and
+	// Output are both nil. The directory (and any parents) is created
+	// automatically with mode 0750 if it does not exist.
+	Dir string
 
 	// Sanitize enables redaction of sensitive path parameters, query parameters,
 	// and headers in log output. nil means no sanitization.
@@ -60,7 +74,19 @@ type LoggerConfig struct {
 func Logger(cfg LoggerConfig) Middleware {
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.Default()
+		switch {
+		case cfg.Output != nil:
+			logger = slog.New(slog.NewTextHandler(cfg.Output, nil))
+		case cfg.Dir != "":
+			path := filepath.Join(cfg.Dir, "access.log")
+			f, err := OpenLogFile(path)
+			if err != nil {
+				panic("quokka: cannot open log file " + path + ": " + err.Error())
+			}
+			logger = slog.New(slog.NewTextHandler(f, nil))
+		default:
+			logger = slog.Default()
+		}
 	}
 
 	var san *Sanitizer
@@ -92,6 +118,27 @@ func Logger(cfg LoggerConfig) Middleware {
 			)
 		}
 	}
+}
+
+// OpenLogFile opens or creates a file for appending structured log output.
+// The caller is responsible for closing the file when the server shuts down.
+//
+// Example (file + console):
+//
+//	f, err := quokka.OpenLogFile("/var/log/app.log")
+//	if err != nil { ... }
+//	defer f.Close()
+//	r.Use(quokka.Logger(quokka.LoggerConfig{
+//	    Output: io.MultiWriter(os.Stderr, f),
+//	}))
+func OpenLogFile(path string) (*os.File, error) {
+	safePath := filepath.Clean(path)
+	if dir := filepath.Dir(safePath); dir != "." {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return nil, err
+		}
+	}
+	return os.OpenFile(safePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 }
 
 // Recover gracefully handles panics and returns 500
