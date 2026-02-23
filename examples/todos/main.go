@@ -135,7 +135,7 @@ func main() {
 	r := quokka.New()
 	r.Use(
 		quokka.Recover(logger),
-		quokka.Logger(logger),
+		quokka.Logger(quokka.LoggerConfig{Logger: logger}),
 		quokka.CORS(quokka.DefaultCORSConfig()),
 		quokka.SecurityHeaders(quokka.DefaultSecurityHeadersConfig()),
 	)

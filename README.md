@@ -20,7 +20,7 @@ import (
 
 func main() {
     r := quokka.New()
-    r.Use(quokka.Recover(nil), quokka.Logger(nil))
+    r.Use(quokka.Recover(nil), quokka.Logger(quokka.LoggerConfig{}))
 
     r.GET("/hello/:name", func(c *quokka.Context) {
         c.JSON(http.StatusOK, map[string]any{"hello": c.Param("name")})
@@ -234,19 +234,33 @@ type Middleware func(Handler) Handler
 Register middleware globally or per-group/route:
 
 ```go
-r.Use(quokka.Recover(nil), quokka.Logger(nil))           // global
+r.Use(quokka.Recover(nil), quokka.Logger(quokka.LoggerConfig{}))           // global
 api := r.Group("/api", quokka.Timeout(5*time.Second))     // per-group
 r.GET("/path", handler, quokka.BodyLimit(1<<20))          // per-route
 ```
 
 ### Logger
 
-Structured access logging via `slog`. Injects a request ID (from `X-Request-Id` header or auto-generated) and logs method, path, status, and duration.
+Structured access logging via `slog`. Injects a request ID (from `X-Request-Id` header or auto-generated) and logs method, path, status, and duration. Accepts a `LoggerConfig` to set the logger and optional sanitization.
 
 ```go
-r.Use(quokka.Logger(nil))  // uses slog.Default()
-r.Use(quokka.Logger(myLogger))
+r.Use(quokka.Logger(quokka.LoggerConfig{}))                         // uses slog.Default()
+r.Use(quokka.Logger(quokka.LoggerConfig{Logger: myLogger}))         // custom logger
+r.Use(quokka.Logger(quokka.LoggerConfig{                            // with sanitization
+    Logger: myLogger,
+    Sanitize: &quokka.SanitizeConfig{
+        Params:  []string{"email"},
+        Headers: []string{"Authorization"},
+    },
+}))
 ```
+
+`LoggerConfig` fields:
+
+| Field | Description |
+|-------|-------------|
+| `Logger` | `*slog.Logger` for output (nil uses `slog.Default()`) |
+| `Sanitize` | `*SanitizeConfig` for redaction (nil disables) |
 
 Retrieve the request ID downstream:
 
@@ -324,6 +338,35 @@ r.Use(quokka.Gzip(quokka.GzipConfig{}))  // defaults: level=DefaultCompression, 
 |-------|---------|
 | `Level` | `gzip.DefaultCompression` |
 | `MinLength` | 256 bytes |
+
+### Sanitizer
+
+`Sanitizer` is a reusable utility for redacting sensitive path parameters, query parameters, and headers. Create one via `NewSanitizer` and call its methods from any output writer. The `Logger` middleware integrates with it automatically via `LoggerConfig.Sanitize`.
+
+```go
+// Standalone usage
+san := quokka.NewSanitizer(quokka.SanitizeConfig{
+    Params:      []string{"email", "ssn"},
+    QueryParams: []string{"token"},
+    Headers:     []string{"Authorization", "X-Api-Key"},
+    Mask:        "***",  // default
+})
+
+path := san.Path(req.URL.Path, params)     // redacted path
+query := san.Query(req.URL.RawQuery)       // redacted query string
+headers := san.Headers(req.Header)         // cloned headers with redacted values
+```
+
+`SanitizeConfig` fields:
+
+| Field | Default |
+|-------|---------|
+| `Params` | (empty) |
+| `QueryParams` | (empty) |
+| `Headers` | (empty) |
+| `Mask` | `"***"` |
+
+`NewSanitizer` returns nil when all lists are empty (no work). Methods on a nil `*Sanitizer` return inputs unchanged, so callers can skip nil checks.
 
 ### Body Limit
 

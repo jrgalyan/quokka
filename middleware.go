@@ -46,11 +46,28 @@ func chain(mw []Middleware, h Handler) Handler {
 	return h
 }
 
-// Logger provides structured access logging with request id
-func Logger(logger *slog.Logger) Middleware {
+// LoggerConfig configures the Logger middleware.
+type LoggerConfig struct {
+	// Logger is the slog.Logger used for output. nil uses slog.Default().
+	Logger *slog.Logger
+
+	// Sanitize enables redaction of sensitive path parameters, query parameters,
+	// and headers in log output. nil means no sanitization.
+	Sanitize *SanitizeConfig
+}
+
+// Logger provides structured access logging with request id.
+func Logger(cfg LoggerConfig) Middleware {
+	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	var san *Sanitizer
+	if cfg.Sanitize != nil {
+		san = NewSanitizer(*cfg.Sanitize)
+	}
+
 	return func(next Handler) Handler {
 		return func(c *Context) {
 			id := c.R.Header.Get("X-Request-Id")
@@ -65,10 +82,11 @@ func Logger(logger *slog.Logger) Middleware {
 			if status == 0 {
 				status = http.StatusOK
 			}
+			logPath := san.Path(c.R.URL.Path, c.params)
 			logger.Info("request",
 				slog.String("id", id),
 				slog.String("method", c.R.Method),
-				slog.String("path", c.R.URL.Path),
+				slog.String("path", logPath),
 				slog.Int("status", status),
 				slog.String("duration", dur.String()),
 			)

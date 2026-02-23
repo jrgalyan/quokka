@@ -8,7 +8,7 @@
 // Getting started:
 //
 //	r := quokka.New()
-//	r.Use(quokka.Recover(nil), quokka.Logger(nil))
+//	r.Use(quokka.Recover(nil), quokka.Logger(quokka.LoggerConfig{}))
 //	r.Handle(http.MethodGet, "/hello/:name", func(c *quokka.Context) {
 //		c.JSON(http.StatusOK, map[string]any{"hello": c.Param("name")})
 //	})

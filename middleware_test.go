@@ -33,7 +33,7 @@ var _ = Describe("Middleware", func() {
 	It("Logger injects request id and logs", func() {
 		r := q.New()
 		// use default logger
-		r.Use(q.Logger(nil))
+		r.Use(q.Logger(q.LoggerConfig{}))
 		var seen string
 		r.GET("/id", func(c *q.Context) {
 			if v, ok := q.RequestID(c.Context()); ok {
@@ -161,7 +161,7 @@ var _ = Describe("Middleware", func() {
 
 	It("Logger generates request ID when not provided", func() {
 		r := q.New()
-		r.Use(q.Logger(nil))
+		r.Use(q.Logger(q.LoggerConfig{}))
 		var seen string
 		r.GET("/id", func(c *q.Context) {
 			if v, ok := q.RequestID(c.Context()); ok {
@@ -180,7 +180,7 @@ var _ = Describe("Middleware", func() {
 
 	It("Logger logs status 200 when handler writes no explicit status", func() {
 		r := q.New()
-		r.Use(q.Logger(nil))
+		r.Use(q.Logger(q.LoggerConfig{}))
 		r.GET("/implicit", func(c *q.Context) {
 			// handler doesn't call any response method
 		})
