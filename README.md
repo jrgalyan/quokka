@@ -1,6 +1,6 @@
 # quokka
 
-A minimal, production-ready HTTP framework built on top of Go's `net/http`.
+A minimal HTTP framework built on top of Go's `net/http`.
 
 ```
 go get github.com/jrgalyan/quokka
