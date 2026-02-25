@@ -243,6 +243,13 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	urlPath := req.URL.Path
 	if r.RedirectTrailingSlash && len(urlPath) > 1 && strings.HasSuffix(urlPath, "/") {
 		target := strings.TrimRight(urlPath, "/")
+		// Guard against open redirect (GHSA-mqqf-5wvp-8fh8): backslashes in
+		// the path or a double-slash prefix are interpreted by browsers as a
+		// protocol-relative URL (e.g. /\evil.com → //evil.com). Skip the
+		// redirect entirely and let the request fall through to normal routing.
+		if strings.ContainsRune(target, '\\') || (len(target) > 1 && target[1] == '/') {
+			goto route
+		}
 		if q := req.URL.RawQuery; q != "" {
 			target += "?" + q
 		}
@@ -250,6 +257,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Redirect(w, req, target, http.StatusMovedPermanently)
 		return
 	}
+
+route:
 
 	n, params := r.find(urlPath)
 	var h Handler

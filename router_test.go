@@ -308,6 +308,39 @@ var _ = Describe("Router", func() {
 		Expect(rr.Code).To(Equal(http.StatusOK))
 	})
 
+	// GHSA-mqqf-5wvp-8fh8: backslashes in a path can be interpreted by
+	// browsers as a protocol-relative URL (/\evil.com → //evil.com), enabling
+	// an open redirect attack.
+	It("does not redirect a path with a backslash (open redirect guard)", func() {
+		r := q.New()
+		r.RedirectTrailingSlash = true
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, `/\evil.com/`, nil))
+		Expect(rr.Code).NotTo(Equal(http.StatusMovedPermanently))
+		Expect(rr.Header().Get("Location")).To(BeEmpty())
+	})
+
+	It("does not redirect a percent-encoded backslash path (open redirect guard)", func() {
+		r := q.New()
+		r.RedirectTrailingSlash = true
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, `/%5Cevil.com/`, nil))
+		Expect(rr.Code).NotTo(Equal(http.StatusMovedPermanently))
+		Expect(rr.Header().Get("Location")).To(BeEmpty())
+	})
+
+	It("does not redirect a path that would produce a double-slash prefix (open redirect guard)", func() {
+		r := q.New()
+		r.RedirectTrailingSlash = true
+
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, `//evil.com/`, nil))
+		Expect(rr.Code).NotTo(Equal(http.StatusMovedPermanently))
+		Expect(rr.Header().Get("Location")).To(BeEmpty())
+	})
+
 	It("auto HEAD returns 200 with headers for GET route", func() {
 		r := q.New()
 		r.GET("/items", func(c *q.Context) {
